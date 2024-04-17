@@ -35,12 +35,6 @@ size_t constexpr strLiteralLength(char const* str) {
   return *str ? 1 + strLiteralLength(str + 1) : 0;
 }
 
-constexpr char const* CLANG_OFFLOAD_BUNDLER_MAGIC_STR = "__CLANG_OFFLOAD_BUNDLE__";
-constexpr char const* OFFLOAD_KIND_HIP = "hip";
-constexpr char const* OFFLOAD_KIND_HIPV4 = "hipv4";
-constexpr char const* OFFLOAD_KIND_HCC = "hcc";
-constexpr char const* AMDGCN_TARGET_TRIPLE = "amdgcn-amd-amdhsa-";
-
 static constexpr size_t bundle_magic_string_size =
     strLiteralLength(CLANG_OFFLOAD_BUNDLER_MAGIC_STR);
 

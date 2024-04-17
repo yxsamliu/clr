@@ -36,10 +36,7 @@ namespace hip {
 //Fat Binary Per Device info
 class FatBinaryDeviceInfo {
 public:
-  FatBinaryDeviceInfo (const void* binary_image, size_t binary_size, size_t binary_offset)
-                      : binary_image_(binary_image), binary_size_(binary_size),
-                        binary_offset_(binary_offset), program_(nullptr),
-                        add_dev_prog_(false), prog_built_(false) {}
+  FatBinaryDeviceInfo (const void* binary_image, size_t binary_size, size_t binary_offset);
 
   ~FatBinaryDeviceInfo();
 

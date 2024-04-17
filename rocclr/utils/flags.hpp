@@ -156,7 +156,9 @@ release(cstring, CUDA_VISIBLE_DEVICES, "",                                    \
 release(bool, GPU_ENABLE_WGP_MODE, true,                                      \
         "Enables WGP Mode in HW if available")                                \
 release(bool, GPU_DUMP_CODE_OBJECT, false,                                    \
-        "Enable dump code object")                                            \
+        "Enable dump code object to _code_object_{hash}")                     \
+release(cstring, GPU_SWAP_CODE_OBJECT, "",                                    \
+        "Swap code object by hash by specifying hash:file delimited by ';'")  \
 release(uint, GPU_MAX_USWC_ALLOC_SIZE, 2048,                                  \
         "Set a limit in Mb on the maximum USWC allocation size"               \
         "-1 = No limit")                                                      \

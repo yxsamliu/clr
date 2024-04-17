@@ -27,6 +27,79 @@ THE SOFTWARE.
 #include "hip_platform.hpp"
 
 namespace hip {
+static std::string* swapCodeObject(const std::string& image) {
+    std::hash<std::string> hasher;
+    auto hashed = hasher(image);
+    std::string hashKey = std::to_string(hashed);
+    static std::unordered_map<std::string, std::string> hashToObj;
+
+    const char* env = std::getenv("GPU_SWAP_CODE_OBJECT");
+    if (env != nullptr) {
+        std::unordered_map<std::string, std::string> hashToFile;
+        std::istringstream envStream(env);
+        std::string token;
+        while (getline(envStream, token, ';')) {
+            auto pos = token.find(':');
+            if (pos != std::string::npos) {
+                hashToFile[token.substr(0, pos)] = token.substr(pos + 1);
+            }
+        }
+
+        auto it = hashToFile.find(hashKey);
+        if (it != hashToFile.end()) {
+            ClPrint(amd::LOG_INFO, amd::LOG_CODE, "Matching hash found. "
+                   "Swapping content from file: %s", it->second.c_str());
+
+            // Load file content if hash matches
+            std::ifstream ifs(it->second, std::ios::binary);
+            if (ifs) {
+                std::ostringstream ss;
+                ss << ifs.rdbuf();
+                ifs.close();
+                hashToObj[hashKey] = ss.str();
+                return &(hashToObj[hashKey]);
+            } else {
+                ClPrint(amd::LOG_ERROR, amd::LOG_CODE,
+                        "Failed to open file: %s", it->second.c_str());
+            }
+        }
+    }
+    return nullptr;
+}
+
+static void dumpCodeObject(const std::string& image) {
+    std::hash<std::string> hasher;
+    auto hashed = hasher(image);
+    char fname[50];
+    sprintf(fname, "_code_object_%s.o", std::to_string(hashed).c_str());
+    ClPrint(amd::LOG_INFO, amd::LOG_CODE, "Code object saved in %s\n", fname);
+    std::ofstream ofs(fname, std::ios::binary);
+    ofs << image;
+    ofs.close();
+}
+
+FatBinaryDeviceInfo::FatBinaryDeviceInfo (const void* binary_image, size_t binary_size, size_t binary_offset)
+                    : binary_image_(binary_image), binary_size_(binary_size),
+                      binary_offset_(binary_offset), program_(nullptr),
+                      add_dev_prog_(false), prog_built_(false) {
+  std::string originalContent{(const char*)binary_image_ + binary_offset_,
+    binary_size_};
+
+  const char* gpuSwapEnv = std::getenv("GPU_SWAP_CODE_OBJECT");
+  if (gpuSwapEnv && std::strlen(gpuSwapEnv) > 0) {
+      if (std::string *swapFatBin = swapCodeObject(originalContent)) {
+        binary_image_ = swapFatBin->data();
+        binary_offset_ = 0;
+        binary_size_ = swapFatBin->size();
+      }
+  }
+
+  if (GPU_DUMP_CODE_OBJECT != 0) {
+      dumpCodeObject(std::string((const char*)binary_image_ + binary_offset_,
+          binary_size_));
+  }
+
+}
 
 FatBinaryDeviceInfo::~FatBinaryDeviceInfo() {
   if (program_ != nullptr) {
