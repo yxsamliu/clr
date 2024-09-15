@@ -133,8 +133,8 @@ add_to_config(_versionInfo HIP_VERSION_GITHASH)
 # Enable preprocessed hiprtc-builtins library
 include(HIPRTC RESULT_VARIABLE HIPRTC_CMAKE)
 # Requires clang and llvm-mc to create this library.
-find_package(LLVM REQUIRED CONFIG HINTS ${ROCM_PATH}/llvm)
-find_package(Clang REQUIRED CONFIG HINTS ${ROCM_PATH}/llvm)
+find_package(LLVM REQUIRED CONFIG HINTS /home/yaxunl/git/llvm2/assert)
+find_package(Clang REQUIRED CONFIG HINTS /home/yaxunl/git/llvm2/assert)
 set(HIPRTC_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/hip_rtc_gen")
 set(HIPRTC_GEN_HEADER "${HIPRTC_GEN_DIR}/hipRTC_header.h")
 set(HIPRTC_GEN_MCIN "${HIPRTC_GEN_DIR}/hipRTC_header.mcin")
