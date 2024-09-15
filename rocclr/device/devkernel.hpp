@@ -95,6 +95,8 @@ struct KernelParameterDescriptor {
   std::string name_;      //!< The parameter's name in the source
   std::string typeName_;  //!< Argument's type name
   uint32_t alignment_;    //!< Argument's alignment
+  uint32_t origIndex_ = ~0U;
+  uint64_t origOffset_ = 0;
 };
 }
 
@@ -124,7 +126,9 @@ enum class ArgField : uint8_t {
   IsVolatile    = 11,
   IsPipe        = 12,
   Offset        = 13,
-  MaxSize       = 14
+  MaxSize       = 14,
+  OrigIndex     = 15,
+  OrigOffset    = 16,
 };
 
 enum class AttrField : uint8_t {

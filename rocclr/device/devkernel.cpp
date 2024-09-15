@@ -390,6 +390,12 @@ static amd_comgr_status_t populateArgsV3(const amd_comgr_metadata_node_t key,
     case ArgField::Offset:
       lcArg->offset_ = atoi(buf.c_str());
       break;
+    case ArgField::OrigIndex:
+      lcArg->origIndex_ = atoi(buf.c_str());
+      break;
+    case ArgField::OrigOffset:
+      lcArg->origOffset_ = atol(buf.c_str());
+      break;
     case ArgField::ValueKind:
       {
         amd::KernelParameterDescriptor::Desc itArgValue

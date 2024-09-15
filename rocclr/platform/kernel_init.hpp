@@ -181,6 +181,8 @@ const amd::Kernel::ArgFieldMapV3Type amd::Kernel::kArgFieldMapV3[] = {
   {".is_restrict",    ArgField::IsRestrict},
   {".is_volatile",    ArgField::IsVolatile},
   {".is_pipe",        ArgField::IsPipe},
+  {".original_arg_index", ArgField::OrigIndex},
+  {".original_arg_offset", ArgField::OrigOffset},
   {".offset",         ArgField::Offset}
 };
 

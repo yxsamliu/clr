@@ -105,12 +105,17 @@ address KernelParameters::alloc(device::VirtualDevice& vDev) {
 
 // =================================================================================================
 bool KernelParameters::captureAndSet(void** kernelParams, address kernArgs, address mem) {
-
   for (size_t idx = 0; idx < signature_.numParameters(); ++idx) {
     KernelParameterDescriptor& desc = signature_.params()[idx];
     void* value = nullptr;
     if (kernelParams != nullptr) {
-      value = kernelParams[idx];
+      unsigned origIndex = idx;
+      size_t origOffset = 0;
+      if (desc.origIndex_ != ~0U) {
+        origIndex = desc.origIndex_;
+        origOffset = desc.origOffset_;
+      }
+      value = kernelParams[origIndex] + origOffset;
     } else {
       value = kernArgs + desc.offset_;
     }
