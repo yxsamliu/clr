@@ -112,17 +112,19 @@ bool KernelParameters::captureAndSet(void** kernelParams, address kernArgs, addr
   for (size_t idx = 0; idx < signature_.numParameters(); ++idx) {
     KernelParameterDescriptor& desc = signature_.params()[idx];
     void* value = nullptr;
+    if (std::getenv("DBG_PRELOAD")) {
+      std::cerr << "idx: " << idx << std::endl << std::flush;
+      std::cerr << "desc.origIndex_: " << desc.origIndex_ << std::endl << std::flush;
+      std::cerr << "desc.origOffset_: " << desc.origOffset_ << std::endl << std::flush;
+    }
     if (kernelParams != nullptr) {
-      value = kernelParams[idx];
-      #if 1
-      int tmpidx = idx;
-      while (value == nullptr && tmpidx > 0) {
-        value = kernelParams[--tmpidx];
+      unsigned origIndex = idx;
+      size_t origOffset = 0;
+      if (desc.origIndex_ != ~0U) {
+        origIndex = desc.origIndex_;
+        origOffset = desc.origOffset_;
       }
-      #endif
-      if (value == nullptr)
-        return false;
-      value += desc.offset_;
+      value = kernelParams[origIndex] + origOffset;
     } else {
       value = kernArgs + desc.offset_;
     }

@@ -44,3 +44,4 @@ install/
 # Editor temp files
 *.swp
 *.swo
+/Debug/

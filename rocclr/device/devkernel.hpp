@@ -94,6 +94,8 @@ struct KernelParameterDescriptor {
   std::string name_;      //!< The parameter's name in the source
   std::string typeName_;  //!< Argument's type name
   uint32_t alignment_;    //!< Argument's alignment
+  uint32_t origIndex_ = ~0U;
+  uint64_t origOffset_ = 0;
 };
 }
 
@@ -122,7 +124,9 @@ enum class ArgField : uint8_t {
   IsRestrict    = 10,
   IsVolatile    = 11,
   IsPipe        = 12,
-  Offset        = 13
+  Offset        = 13,
+  OrigIndex     = 14,
+  OrigOffset    = 15,
 };
 
 enum class AttrField : uint8_t {
@@ -260,7 +264,9 @@ static const std::map<std::string,ArgField> ArgFieldMapV3 =
   {".is_const",       ArgField::IsConst},
   {".is_restrict",    ArgField::IsRestrict},
   {".is_volatile",    ArgField::IsVolatile},
-  {".is_pipe",        ArgField::IsPipe}
+  {".is_pipe",        ArgField::IsPipe},
+  {".original_arg_index", ArgField::OrigIndex},
+  {".original_arg_offset", ArgField::OrigOffset},
 };
 
 static const std::map<std::string, uint32_t> ArgValueKindV3 = {
