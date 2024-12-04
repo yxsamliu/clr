@@ -45,3 +45,4 @@ install/
 *.swp
 *.swo
 /Debug/
+/Release/

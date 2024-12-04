@@ -360,9 +360,6 @@ hipError_t ihipLaunchKernelCommand(amd::Command*& command, hipFunction_t f,
     }
     kernargs = reinterpret_cast<address>(extra[1]);
   }
-      if (getenv("DBG_PRELOAD")) {
-        std::cerr << "ihipLaunchKernelCommand\n";
-      }
 
   if (DEBUG_HIP_KERNARG_COPY_OPT) {
     if (CL_SUCCESS != kernelCommand->AllocCaptureSetValidate(kernelParams, kernargs)) {
@@ -372,9 +369,6 @@ hipError_t ihipLaunchKernelCommand(amd::Command*& command, hipFunction_t f,
 
   } else {
     for (size_t i = 0; i < kernel->signature().numParameters(); ++i) {
-      if (getenv("DBG_PRELOAD")) {
-        std::cerr << "ihipLaunchKernelCommand: arg " << i << "\n";
-      }
       const amd::KernelParameterDescriptor& desc = kernel->signature().at(i);
       if (kernelParams == nullptr) {
         assert(kernargs != nullptr);
@@ -383,10 +377,6 @@ hipError_t ihipLaunchKernelCommand(amd::Command*& command, hipFunction_t f,
       } else {
         kernel->parameters().set(i, desc.size_, kernelParams[i],
                                  desc.type_ == T_POINTER /*svmBound*/);
-        if (getenv("DBG_PRELOAD")) {
-          std::cerr << "ihipLaunchKernelCommand: use kernelParams: desc.size_: "
-                    << desc.size_ << "desc.offset_: " << desc.offset_ << "\n";
-        }
       }
     }
 

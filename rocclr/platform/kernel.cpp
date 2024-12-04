@@ -105,18 +105,9 @@ address KernelParameters::alloc(device::VirtualDevice& vDev) {
 
 // =================================================================================================
 bool KernelParameters::captureAndSet(void** kernelParams, address kernArgs, address mem) {
-  if (std::getenv("DBG_PRELOAD")) {
-    std::cerr << "Number of kernel parameters: " << signature_.numParameters() << std::endl;
-  }
-
   for (size_t idx = 0; idx < signature_.numParameters(); ++idx) {
     KernelParameterDescriptor& desc = signature_.params()[idx];
     void* value = nullptr;
-    if (std::getenv("DBG_PRELOAD")) {
-      std::cerr << "idx: " << idx << std::endl << std::flush;
-      std::cerr << "desc.origIndex_: " << desc.origIndex_ << std::endl << std::flush;
-      std::cerr << "desc.origOffset_: " << desc.origOffset_ << std::endl << std::flush;
-    }
     if (kernelParams != nullptr) {
       unsigned origIndex = idx;
       size_t origOffset = 0;
@@ -127,10 +118,6 @@ bool KernelParameters::captureAndSet(void** kernelParams, address kernArgs, addr
       value = kernelParams[origIndex] + origOffset;
     } else {
       value = kernArgs + desc.offset_;
-    }
-    if (std::getenv("DBG_PRELOAD")) {
-      std::cerr << "idx: " << idx << std::endl << std::flush;
-      std::cerr << "desc.offset_: " << desc.offset_ << std::endl << std::flush;
     }
     void* param = mem + desc.offset_;
     uint32_t uint32_value = 0;
