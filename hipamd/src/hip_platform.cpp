@@ -27,6 +27,8 @@
 
 #include <unordered_map>
 #include <mutex>
+#include <cstdarg>
+#include <cstdio>
 
 namespace hip {
 constexpr unsigned __hipFatMAGIC2 = 0x48495046;  // "HIPF"
@@ -343,30 +345,46 @@ namespace hip_impl {
 hipError_t ihipOccupancyMaxActiveBlocksPerMultiprocessor(
     int* maxBlocksPerCU, int* numBlocksPerGrid, int* bestBlockSize, const amd::Device& device,
     hipFunction_t func, int inputBlockSize, size_t dynamicSMemSize, bool bCalcPotentialBlkSz) {
+  // Add debug output functionality
+  bool debugOutput = (getenv("DBG_OCCU") != nullptr);
+  auto dbgPrint = [&debugOutput](const char* fmt, ...) {
+    if (!debugOutput) return;
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[OCCU_DBG] ");
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+  };
+
   hip::DeviceFunc* function = hip::DeviceFunc::asFunction(func);
   const amd::Kernel& kernel = *function->kernel();
+
+  dbgPrint("Calculating occupancy for kernel: %s\n", kernel.name().c_str());
+  dbgPrint("Input block size: %d, Dynamic shared memory: %zu bytes\n",
+           inputBlockSize, dynamicSMemSize);
 
   const device::Kernel::WorkGroupInfo* wrkGrpInfo = kernel.getDeviceKernel(device)->workGroupInfo();
   if (bCalcPotentialBlkSz == false) {
     if (inputBlockSize <= 0) {
+      dbgPrint("Error: Invalid input block size %d\n", inputBlockSize);
       return hipErrorInvalidValue;
     }
     *bestBlockSize = 0;
     // Make sure the requested block size is smaller than max supported
     if (inputBlockSize > int(device.info().maxWorkGroupSize_)) {
+      dbgPrint("Block size %d exceeds device maximum %d\n",
+               inputBlockSize, int(device.info().maxWorkGroupSize_));
       *maxBlocksPerCU = 0;
       *numBlocksPerGrid = 0;
       return hipSuccess;
     }
   } else {
     if (inputBlockSize > int(device.info().maxWorkGroupSize_) || inputBlockSize <= 0) {
-      // The user wrote the kernel to work with a workgroup size
-      // bigger than this hardware can support. Or they do not care
-      // about the size So just assume its maximum size is
-      // constrained by hardware
       inputBlockSize = device.info().maxWorkGroupSize_;
+      dbgPrint("Adjusting block size to device maximum: %d\n", inputBlockSize);
     }
   }
+
   // Find wave occupancy per CU => simd_per_cu * GPR usage
   size_t MaxWavesPerSimd;
 
@@ -375,23 +393,36 @@ hipError_t ihipOccupancyMaxActiveBlocksPerMultiprocessor(
   } else {
     MaxWavesPerSimd = 16;
   }
+  dbgPrint("Device ISA version: %d, MaxWavesPerSimd: %zu\n",
+           device.isa().versionMajor(), MaxWavesPerSimd);
+
   size_t VgprWaves = MaxWavesPerSimd;
   uint32_t VgprGranularity = device.info().vgprAllocGranularity_;
   size_t maxVGPRs = device.info().vgprsPerSimd_;
   size_t wavefrontSize = wrkGrpInfo->wavefrontSize_;
+
+  dbgPrint("Initial VGPR state - Granularity: %u, Max VGPRs: %zu, Wavefront size: %zu\n",
+           VgprGranularity, maxVGPRs, wavefrontSize);
+
   if (device.isa().versionMajor() >= 10) {
     if (wavefrontSize == 64) {
       maxVGPRs = maxVGPRs >> 1;
       VgprGranularity = VgprGranularity >> 1;
+      dbgPrint("RDNA with 64-thread wavefront - Adjusted VGPRs: %zu, Granularity: %u\n",
+               maxVGPRs, VgprGranularity);
     }
   }
+
   if (wrkGrpInfo->usedVGPRs_ > 0) {
     VgprWaves = maxVGPRs / amd::alignUp(wrkGrpInfo->usedVGPRs_, VgprGranularity);
+    dbgPrint("VGPR waves calculation - Used VGPRs: %u, Aligned: %u, Resulting waves: %zu\n",
+             wrkGrpInfo->usedVGPRs_,
+             amd::alignUp(wrkGrpInfo->usedVGPRs_, VgprGranularity),
+             VgprWaves);
   }
 
   if (VgprWaves == 0) {
-    // This should not happen ideally, but in case the usedVGPRs_/availableVGPRs_ values are
-    // incorrect, it can lead to a crash. By returning error, API can exit gracefully.
+    dbgPrint("Error: VGPR waves calculated as 0 - possible incorrect VGPR values\n");
     return hipErrorUnknown;
   }
 
@@ -400,45 +431,56 @@ hipError_t ihipOccupancyMaxActiveBlocksPerMultiprocessor(
     size_t maxSGPRs = device.info().sgprsPerSimd_;
     const size_t SgprWaves = maxSGPRs / amd::alignUp(wrkGrpInfo->usedSGPRs_, 16);
     GprWaves = std::min(VgprWaves, SgprWaves);
+    dbgPrint("SGPR limitation - Max SGPRs: %zu, Used SGPRs: %u, SGPR waves: %zu, Final GPR waves: %zu\n",
+             maxSGPRs, wrkGrpInfo->usedSGPRs_, SgprWaves, GprWaves);
   }
+
   uint32_t simdPerCU = (device.isa().versionMajor() <= 9) ? device.info().simdPerCU_
                                                           : (wrkGrpInfo->isWGPMode_ ? 4 : 2);
+  dbgPrint("SIMD per CU: %u (ISA version: %d, WGP mode: %d)\n",
+           simdPerCU, device.isa().versionMajor(), wrkGrpInfo->isWGPMode_);
+
   const size_t alu_occupancy = simdPerCU * std::min(MaxWavesPerSimd, GprWaves);
   const int alu_limited_threads = alu_occupancy * wrkGrpInfo->wavefrontSize_;
+  dbgPrint("ALU occupancy calculation - Occupancy: %zu waves, Thread limit: %d\n",
+           alu_occupancy, alu_limited_threads);
 
   int lds_occupancy_wgs = INT_MAX;
   const size_t total_used_lds = wrkGrpInfo->usedLDSSize_ + dynamicSMemSize;
   if (total_used_lds != 0) {
     lds_occupancy_wgs = static_cast<int>(device.info().localMemSize_ / total_used_lds);
+    dbgPrint("LDS limitation - Total used: %zu, Device LDS: %zu, Max workgroups: %d\n",
+             total_used_lds, device.info().localMemSize_, lds_occupancy_wgs);
   }
-  // Calculate how many blocks of inputBlockSize we can fit per CU
-  // Need to align with hardware wavefront size. If they want 65 threads, but
-  // waves are 64, then we need 128 threads per block.
-  // So this calculates how many blocks we can fit.
-  *maxBlocksPerCU = alu_limited_threads / amd::alignUp(inputBlockSize, wrkGrpInfo->wavefrontSize_);
-  // Unless those blocks are further constrained by LDS size.
-  *maxBlocksPerCU = std::min(*maxBlocksPerCU, lds_occupancy_wgs);
 
-  // Some callers of this function want to return the block size, in threads, that
-  // leads to the maximum occupancy. In that case, inputBlockSize is the maximum
-  // workgroup size the user wants to allow, or that the hardware can allow.
-  // It is either the number of threads that we are limited to due to occupancy, or
-  // the maximum available block size for this kernel, which could have come from the
-  // user. e.g., if the user indicates the maximum block size is 64 threads, but we
-  // calculate that 128 threads can fit in each CU, we have to give up and return 64.
+  *maxBlocksPerCU = alu_limited_threads / amd::alignUp(inputBlockSize, wrkGrpInfo->wavefrontSize_);
+  *maxBlocksPerCU = std::min(*maxBlocksPerCU, lds_occupancy_wgs);
+  dbgPrint("Max blocks per CU: %d (ALU limited: %d, LDS limited: %d)\n",
+           *maxBlocksPerCU,
+           alu_limited_threads / amd::alignUp(inputBlockSize, wrkGrpInfo->wavefrontSize_),
+           lds_occupancy_wgs);
+
   *bestBlockSize =
       std::min(alu_limited_threads, amd::alignUp(inputBlockSize, wrkGrpInfo->wavefrontSize_));
-  // If the best block size is smaller than the block size used to fit the maximum,
-  // then we need to make the grid bigger for full occupancy.
   const int bestBlocksPerCU = alu_limited_threads / (*bestBlockSize);
+
+  dbgPrint("Best block size calculation - ALU limited: %d, Aligned input: %d, Final: %d\n",
+           alu_limited_threads,
+           amd::alignUp(inputBlockSize, wrkGrpInfo->wavefrontSize_),
+           *bestBlockSize);
+
   uint32_t maxCUs = device.info().maxComputeUnits_;
   if (wrkGrpInfo->isWGPMode_ == false && device.settings().enableWgpMode_ == true) {
     maxCUs *= 2;
   } else if ((wrkGrpInfo->isWGPMode_ == true && device.settings().enableWgpMode_ == false)) {
     maxCUs /= 2;
   }
-  // Unless those blocks are further constrained by LDS size.
+  dbgPrint("Compute Units - Base: %u, Adjusted for WGP mode: %u\n",
+           device.info().maxComputeUnits_, maxCUs);
+
   *numBlocksPerGrid = (maxCUs * std::min(bestBlocksPerCU, lds_occupancy_wgs));
+  dbgPrint("Final grid calculation - Blocks per CU: %d, Total blocks: %d\n",
+           std::min(bestBlocksPerCU, lds_occupancy_wgs), *numBlocksPerGrid);
 
   return hipSuccess;
 }
