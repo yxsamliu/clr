@@ -27,6 +27,41 @@ THE SOFTWARE.
 #include "hip_platform.hpp"
 #include "comgrctx.hpp"
 
+constexpr unsigned __hipFatMAGIC2 = 0x48495046;  // "HIPF"
+
+struct __CudaFatBinaryWrapper {
+  unsigned int magic;
+  unsigned int version;
+  void* binary;
+  void* dummy1;
+};
+
+constexpr char const* CLANG_OFFLOAD_BUNDLER_MAGIC_STR = "__CLANG_OFFLOAD_BUNDLE__";
+constexpr char const* OFFLOAD_KIND_HIP = "hip";
+constexpr char const* OFFLOAD_KIND_HIPV4 = "hipv4";
+constexpr char const* OFFLOAD_KIND_HCC = "hcc";
+constexpr char const* AMDGCN_TARGET_TRIPLE = "amdgcn-amd-amdhsa-";
+
+size_t constexpr strLiteralLength(char const* str) {
+  return *str ? 1 + strLiteralLength(str + 1) : 0;
+}
+
+static constexpr size_t bundle_magic_string_size =
+    strLiteralLength(CLANG_OFFLOAD_BUNDLER_MAGIC_STR);
+
+struct __ClangOffloadBundleInfo {
+  uint64_t offset;
+  uint64_t size;
+  uint64_t bundleEntryIdSize;
+  const char bundleEntryId[1];
+};
+
+struct __ClangOffloadBundleHeader {
+  const char magic[bundle_magic_string_size - 1];
+  uint64_t numOfCodeObjects;
+  __ClangOffloadBundleInfo desc[1];
+};
+
 namespace hip {
 static std::string* swapCodeObject(const std::string& image) {
     std::hash<std::string> hasher;
@@ -68,34 +103,49 @@ static std::string* swapCodeObject(const std::string& image) {
     return nullptr;
 }
 
-static void dumpCodeObject(const std::string& image) {
+static bool dumpCodeObject(const std::string& image) {
+    fprintf(stderr, "enter dumpCodeObject\n");
     std::hash<std::string> hasher;
     auto hashed = hasher(image);
+    fprintf(stderr, "after hasher\n");
     char fname[50];
     sprintf(fname, "_code_object_%s.o", std::to_string(hashed).c_str());
-    ClPrint(amd::LOG_INFO, amd::LOG_CODE, "Code object saved in %s\n", fname);
+    
     std::ofstream ofs(fname, std::ios::binary);
+    if (!ofs) {
+        ClPrint(amd::LOG_ERROR, amd::LOG_CODE, "Failed to create dump file %s\n", fname);
+        return false;
+    }
+    fprintf(stderr, "file %s opened\n", fname);
     ofs << image;
-    ofs.close();
+    if (!ofs) {
+        ClPrint(amd::LOG_ERROR, amd::LOG_CODE, "Failed to write to dump file %s\n", fname);
+        return false;
+    }
+    
+    ClPrint(amd::LOG_INFO, amd::LOG_CODE, "Code object saved in %s\n", fname);
+    return true;
 }
 
 FatBinaryDeviceInfo::FatBinaryDeviceInfo (const void* binary_image, size_t binary_size, size_t binary_offset)
                     : binary_image_(binary_image), binary_size_(binary_size),
                       binary_offset_(binary_offset), program_(nullptr),
                       add_dev_prog_(false), prog_built_(false) {
-  std::string originalContent{(const char*)binary_image_ + binary_offset_,
-    binary_size_};
-
+#if 0
   const char* gpuSwapEnv = std::getenv("GPU_SWAP_CODE_OBJECT");
   if (gpuSwapEnv && std::strlen(gpuSwapEnv) > 0) {
+    std::string originalContent{(const char*)binary_image_ + binary_offset_,
+      binary_size_};
       if (std::string *swapFatBin = swapCodeObject(originalContent)) {
         binary_image_ = swapFatBin->data();
         binary_offset_ = 0;
         binary_size_ = swapFatBin->size();
       }
   }
-
+#endif
   if (GPU_DUMP_CODE_OBJECT != 0) {
+      fprintf(stderr, "dump code object: %p %d %d\n", (void*)binary_image, (int) binary_offset_,
+              (int)binary_size_);
       dumpCodeObject(std::string((const char*)binary_image_ + binary_offset_,
           binary_size_));
   }
@@ -121,7 +171,99 @@ FatBinaryInfo::FatBinaryInfo(const char* fname, const void* image) : fdesc_(amd:
   }
 
   fatbin_dev_info_.resize(g_devices.size(), nullptr);
+
+  // For fat binaries, calculate size from wrapper
+  if (image != nullptr) {
+    calculateFatBinarySize(image);
+  }
 }
+  void FatBinaryInfo::calculateFatBinarySize(const void* binary_image) {
+    fat_binary_size_ = 0;
+    if (!binary_image) return;
+
+    const __ClangOffloadBundleHeader* header = reinterpret_cast<const __ClangOffloadBundleHeader*>(binary_image);
+    fat_binary_size_ = sizeof(__ClangOffloadBundleHeader);
+    
+    // Walk through all bundle entries to calculate total size
+    const __ClangOffloadBundleInfo* desc = &header->desc[0];
+    for (uint64_t i = 0; i < header->numOfCodeObjects; ++i) {
+      fat_binary_size_ = std::max(fat_binary_size_, desc->offset + desc->size);
+      desc = reinterpret_cast<const __ClangOffloadBundleInfo*>(
+        reinterpret_cast<uintptr_t>(&desc->bundleEntryId[0]) + desc->bundleEntryIdSize);
+    }
+  }
+
+  uint64_t FatBinaryInfo::calculateHash() const {
+      if (!image_) {
+          return 0;
+      }
+
+      // FNV-1a hash parameters
+      const uint64_t FNV_PRIME = 1099511628211ULL;
+      const uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
+      
+      uint64_t hash = FNV_OFFSET_BASIS;
+
+      // First verify it's a valid fat binary
+      const __CudaFatBinaryWrapper* fbwrapper = reinterpret_cast<const __CudaFatBinaryWrapper*>(image_);
+      if (fbwrapper->magic != __hipFatMAGIC2 || fbwrapper->version != 1) {
+          return 0;
+      }
+
+      const __ClangOffloadBundleHeader* header = 
+          reinterpret_cast<const __ClangOffloadBundleHeader*>(fbwrapper->binary);
+      
+      // Hash the header information
+      const unsigned char* data = reinterpret_cast<const unsigned char*>(header);
+      for (size_t i = 0; i < sizeof(__ClangOffloadBundleHeader); i++) {
+          hash ^= data[i];
+          hash *= FNV_PRIME;
+      }
+
+      // Walk through all bundle entries and hash their contents
+      const __ClangOffloadBundleInfo* desc = &header->desc[0];
+      for (uint64_t i = 0; i < header->numOfCodeObjects; ++i) {
+          // Hash the bundle entry ID
+          const unsigned char* entryId = 
+              reinterpret_cast<const unsigned char*>(&desc->bundleEntryId[0]);
+          for (uint64_t j = 0; j < desc->bundleEntryIdSize; ++j) {
+              hash ^= entryId[j];
+              hash *= FNV_PRIME;
+          }
+
+          // Hash the actual code object content
+          const unsigned char* codeObject = 
+              reinterpret_cast<const unsigned char*>(header) + desc->offset;
+          for (uint64_t j = 0; j < desc->size; ++j) {
+              hash ^= codeObject[j];
+              hash *= FNV_PRIME;
+          }
+
+          // Move to next descriptor
+          desc = reinterpret_cast<const __ClangOffloadBundleInfo*>(
+              reinterpret_cast<uintptr_t>(&desc->bundleEntryId[0]) + 
+              desc->bundleEntryIdSize);
+      }
+
+      return hash;
+  }
+  bool FatBinaryInfo::SaveFatBinary(const char* filename) const {
+    if (!image_) return false;
+
+    fprintf(stderr, "[HIP_DUMP_FUNCTION] Fat binary size: %zu bytes\n", fat_binary_size_);
+
+    FILE* fp = fopen(filename, "wb");
+    if (!fp) {
+      fprintf(stderr, "[HIP_DUMP_FUNCTION] Error: Could not open %s for writing\n", filename);
+      return false;
+    }
+
+    size_t written = fwrite(image_, 1, fat_binary_size_, fp);
+    fprintf(stderr, "[HIP_DUMP_FUNCTION] Wrote %zu bytes to %s\n", written, filename);
+    fclose(fp);
+    
+    return written == fat_binary_size_;
+  }
 
 FatBinaryInfo::~FatBinaryInfo() {
   // Different devices in the same model have the same binary_image_

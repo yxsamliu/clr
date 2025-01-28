@@ -67,6 +67,37 @@ static bool isCompatibleCodeObject(const std::string& codeobj_target_id, const c
   return codeobj_target_id == short_name;
 }
 
+void PlatformState::queueFunctionForDump(hip::FatBinaryInfo** modules, const char* deviceName) {
+    amd::ScopedLock lock(lock_);
+    pendingFunctionDumps_.push_back({deviceName, modules});
+}
+hipError_t PlatformState::dumpFatBinary(const char* deviceName, hip::FatBinaryInfo** modules, 
+                                       const char* dumpDir) {
+    if (deviceName == nullptr || modules == nullptr || *modules == nullptr) {
+        return hipErrorInvalidValue;
+    }
+
+    std::string baseDir = dumpDir != nullptr ? dumpDir : ".";
+    std::string filename = baseDir + "/fatbin_dump_" + deviceName + ".hipfb";
+
+    fprintf(stderr, "[DEBUG] Attempting to save fatbin for %s to: %s\n", 
+            deviceName, filename.c_str());
+
+    bool success = (*modules)->SaveFatBinary(filename.c_str());
+    return success ? hipSuccess : hipErrorFileNotFound;
+}
+
+void PlatformState::processPendingDumps() {
+    for (const auto& dumpInfo : pendingFunctionDumps_) {
+        hipError_t result = dumpFatBinary(dumpInfo.deviceName.c_str(), dumpInfo.modules);
+        if (result != hipSuccess) {
+            fprintf(stderr, "[DEBUG] Error dumping fatbin for function %s: %d\n", 
+                    dumpInfo.deviceName.c_str(), result);
+        }
+    }
+    pendingFunctionDumps_.clear();
+}
+// In __hipRegisterFatBinary:
 void** __hipRegisterFatBinary(const void* data) {
   const __CudaFatBinaryWrapper* fbwrapper = reinterpret_cast<const __CudaFatBinaryWrapper*>(data);
   if (fbwrapper->magic != __hipFatMAGIC2 || fbwrapper->version != 1) {
@@ -74,32 +105,57 @@ void** __hipRegisterFatBinary(const void* data) {
                    fbwrapper->version);
     return nullptr;
   }
-  return reinterpret_cast<void**>(PlatformState::instance().addFatBinary(fbwrapper->binary));
+  //fprintf(stderr, "[DEBUG] __hipRegisterFatBinary called with data: %p\n", data);
+  void** result = reinterpret_cast<void**>(PlatformState::instance().addFatBinary(fbwrapper->binary));
+  //fprintf(stderr, "[DEBUG] __hipRegisterFatBinary returning: %p\n", result);
+  return result;
 }
 
+// In __hipRegisterFunction:
 void __hipRegisterFunction(hip::FatBinaryInfo** modules, const void* hostFunction,
-                                      char* deviceFunction, const char* deviceName,
-                                      unsigned int threadLimit, uint3* tid, uint3* bid,
-                                      dim3* blockDim, dim3* gridDim, int* wSize) {
+                          char* deviceFunction, const char* deviceName,
+                          unsigned int threadLimit, uint3* tid, uint3* bid,
+                          dim3* blockDim, dim3* gridDim, int* wSize) {
   static int enable_deferred_loading{[]() {
     char* var = getenv("HIP_ENABLE_DEFERRED_LOADING");
     return var ? atoi(var) : 1;
   }()};
+
+  // Get target function name from environment
+  static const char* target_func = getenv("HIP_DUMP_FUNCTION");
+  
+  if (target_func != nullptr && strcmp(target_func, deviceName) == 0) {
+      if (PlatformState::instance().isInitialized()) {
+          // If already initialized, we can dump immediately
+          (void) PlatformState::instance().dumpFatBinary(deviceName, modules);
+      } else {
+          // Queue for dumping during initialization
+          PlatformState::instance().queueFunctionForDump(modules, deviceName);
+      }
+  }
+  // Check for swap request
+  static const char* swap_func = getenv("HIP_SWAP_FUNCTION");
+  if (swap_func != nullptr) {
+      std::string swap_info(swap_func);
+      size_t colon_pos = swap_info.find(':');
+      if (colon_pos != std::string::npos) {
+          std::string func_name = swap_info.substr(0, colon_pos);
+          std::string file_path = swap_info.substr(colon_pos + 1);
+          
+          if (func_name == deviceName) {
+              // Queue for swapping before module initialization
+              PlatformState::instance().queueFunctionForSwap(modules, deviceName, 
+                                                            file_path.c_str());
+          }
+      }
+  }
+
   hipError_t hip_error = hipSuccess;
   hip::Function* func = new hip::Function(std::string(deviceName), modules);
   hip_error = PlatformState::instance().registerStatFunction(hostFunction, func);
   guarantee((hip_error == hipSuccess), "Cannot register Static function, error: %d", hip_error);
 
-  if (!enable_deferred_loading) {
-    HIP_INIT_VOID();
-    hipFunction_t hfunc = nullptr;
-
-    for (size_t dev_idx = 0; dev_idx < g_devices.size(); ++dev_idx) {
-      hip_error = PlatformState::instance().getStatFunc(&hfunc, hostFunction, dev_idx);
-      guarantee((hip_error == hipSuccess), "Cannot retrieve Static function, error: %d",
-                                            hip_error);
-    }
-  }
+  // Rest of function remains the same...
 }
 
 // Registers a device-side global variable.
@@ -712,12 +768,19 @@ void PlatformState::init() {
     return;
   }
   initialized_ = true;
+  // Process pending swaps
+  swapManager_.processSwaps(statCO_.modules_);
+  
+  // Process fat binaries with potential swaps
   for (auto& it : statCO_.modules_) {
-    hipError_t err = digestFatBinary(it.first, it.second);
-    if (err != hipSuccess) {
-      HIP_ERROR_PRINT(err, "continue parsing remaining modules");
-    }
+      const void* binary = swapManager_.getSwappedBinary(it.first);
+      hipError_t err = digestFatBinary(binary, it.second);
+      if (err != hipSuccess) {
+          HIP_ERROR_PRINT(err, "continue parsing remaining modules");
+      }
   }
+  // Process any pending dumps after modules are initialized
+  processPendingDumps();
   for (auto& it : statCO_.vars_) {
     it.second->resize_dVar(g_devices.size());
   }

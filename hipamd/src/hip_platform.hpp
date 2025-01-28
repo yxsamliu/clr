@@ -120,5 +120,90 @@ class PlatformState {
   std::unordered_map<std::string, std::shared_ptr<UniqueFD>> ufd_map_; //!< Unique File Desc Map
 
   void* dynamicLibraryHandle_{nullptr};
+
+  // For tracking dump requests during initialization
+  struct FunctionDumpInfo {
+      std::string deviceName;
+      hip::FatBinaryInfo** modules;
+  };
+  std::vector<FunctionDumpInfo> pendingFunctionDumps_;
+  void processPendingDumps();
+  public:
+  // Dump functions for debugging
+  hipError_t dumpFatBinary(const char* deviceName, hip::FatBinaryInfo** modules, const char* dumpDir = nullptr);
+  void queueFunctionForDump(hip::FatBinaryInfo** modules, const char* deviceName);
+  bool isInitialized() const { return initialized_; }
+
+  // Class to manage fat binary swaps
+  class SwapManager {
+  public:
+      void queueSwap(hip::FatBinaryInfo** modules, const char* deviceName, const char* filePath) {
+          pendingSwaps_.push_back({deviceName, filePath, modules});
+      }
+
+      // Returns swapped binary if one exists, otherwise returns original
+      const void* getSwappedBinary(const void* original) const {
+          auto it = swapMap_.find(original);
+          if (it != swapMap_.end())
+            fprintf(stderr, "fat binary %p is swapped by %p\n", original, it->second);
+          return (it != swapMap_.end()) ? it->second : original;
+      }
+
+      // Build swap map from pending swaps, using modules map to find matches
+      void processSwaps(const std::unordered_map<const void*, FatBinaryInfo*>& modules) {
+          for (const auto& swap : pendingSwaps_) {
+              for (auto& it : modules) {
+                  if (it.second == *swap.modules) {
+                      fprintf(stderr, "[DEBUG] Found matching module for function %s\n", 
+                              swap.functionName.c_str());
+
+                      const void* new_image = loadSwapFile(swap.filePath.c_str());
+                      if (new_image != nullptr) {
+                          fprintf(stderr, "[DEBUG] Will swap fat binary for %s\n", 
+                                  swap.functionName.c_str());
+                          swapMap_[it.first] = new_image;
+                      }
+                      break;
+                  }
+              }
+          }
+          pendingSwaps_.clear();
+      }
+
+  private:
+      struct SwapInfo {
+          std::string functionName;
+          std::string filePath;
+          hip::FatBinaryInfo** modules;
+      };
+      std::vector<SwapInfo> pendingSwaps_;
+      std::unordered_map<const void*, const void*> swapMap_;
+
+      const void* loadSwapFile(const char* filePath) {
+          amd::Os::FileDesc fdesc;
+          size_t fsize = 0;
+          if (!amd::Os::GetFileHandle(filePath, &fdesc, &fsize)) {
+              fprintf(stderr, "[DEBUG] Failed to open swap file: %s\n", filePath);
+              return nullptr;
+          }
+
+          const void* new_image = nullptr;
+          if (!amd::Os::MemoryMapFileDesc(fdesc, fsize, 0, &new_image)) {
+              fprintf(stderr, "[DEBUG] Failed to map swap file content\n");
+              amd::Os::CloseFileHandle(fdesc);
+              return nullptr;
+          }
+          fprintf(stderr, "[DEBUG] mapped file %s for swapping\n", filePath);
+          return new_image;
+      }
+  };
+
+  SwapManager swapManager_;
+
+public:
+    void queueFunctionForSwap(hip::FatBinaryInfo** modules, const char* deviceName, 
+                             const char* filePath) {
+        swapManager_.queueSwap(modules, deviceName, filePath);
+    }
 };
 }  // namespace hip

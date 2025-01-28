@@ -105,6 +105,20 @@ public:
     return hipSuccess;
   }
 
+  // Get raw binary data
+  const void* GetBinaryData() const {
+    return image_;
+  }
+
+  // Get size of binary data for specified device
+  size_t GetBinarySize() const {
+    return fat_binary_size_;
+  }
+
+  // Save fat binary to file with given name
+  bool SaveFatBinary(const char* filename) const;
+
+  uint64_t calculateHash() const;
 private:
   std::string fname_;        //!< File name
   amd::Os::FileDesc fdesc_;  //!< File descriptor
@@ -122,8 +136,11 @@ private:
   std::vector<FatBinaryDeviceInfo*> fatbin_dev_info_;
 
   std::shared_ptr<UniqueFD> ufd_; //!< Unique file descriptor
-};
+  size_t fat_binary_size_ = 0;   //!< Size of the fat binary};
 
+  // Calculate size of the fat binary from bundle header
+  void calculateFatBinarySize(const void* binary_image);
+};
 }; // namespace hip
 
 #endif // HIP_FAT_BINARY_HPP
