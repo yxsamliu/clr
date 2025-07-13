@@ -488,13 +488,25 @@ hipError_t StatCO::getStatFuncAttr(hipFuncAttributes* func_attr, const void* hos
 hipError_t StatCO::registerStatGlobalVar(const void* hostVar, Var* var) {
   amd::ScopedLock lock(sclock_);
 
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::registerStatGlobalVar: hostVar=%p, varName='%s', "
+          "moduleInfo=%p, current vars count=%zu", 
+          hostVar, var->getName().c_str(), var->moduleInfo(), vars_.size());
+
   auto var_it = vars_.find(hostVar);
   if ((var_it != vars_.end()) && (var_it->second->getName() != var->getName())) {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::registerStatGlobalVar: CONFLICT - hostVar=%p "
+            "already registered with different name: existing='%s', new='%s'",
+            hostVar, var_it->second->getName().c_str(), var->getName().c_str());
     return hipErrorInvalidSymbol;
   }
 
   vars_.insert(std::make_pair(hostVar, var));
   module_to_hostVars_[var->moduleInfo()].push_back(hostVar);
+  
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::registerStatGlobalVar: SUCCESS - registered "
+          "hostVar=%p, varName='%s', total vars count=%zu", 
+          hostVar, var->getName().c_str(), vars_.size());
+  
   return hipSuccess;
 }
 
@@ -502,22 +514,51 @@ hipError_t StatCO::getStatGlobalVar(const void* hostVar, int deviceId, hipDevice
                                     size_t* size_ptr) {
   amd::ScopedLock lock(sclock_);
 
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: looking for hostVar=%p, "
+          "deviceId=%d, total registered vars=%zu", hostVar, deviceId, vars_.size());
+
+  // Debug: Print all registered variables
+  if (vars_.size() <= 20) {  // Only print if not too many to avoid spam
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: Registered variables:");
+    for (const auto& pair : vars_) {
+      ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG]   hostVar=%p -> varName='%s', moduleInfo=%p",
+              pair.first, pair.second->getName().c_str(), pair.second->moduleInfo());
+    }
+  }
+
   const auto it = vars_.find(hostVar);
   if (it == vars_.end()) {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: FAILED - hostVar=%p not found "
+            "in registry (total vars: %zu)", hostVar, vars_.size());
     return hipErrorInvalidSymbol;
   }
+
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: FOUND hostVar=%p -> varName='%s'",
+          hostVar, it->second->getName().c_str());
 
   // Lazy load
   FatBinaryInfo** module = it->second->moduleInfo();
   if (*(module) == nullptr) {
-    std::ignore = digestFatBinary(module_to_hostModule_[module], *module);
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: lazy loading fat binary for module=%p",
+            module);
+    hipError_t err = digestFatBinary(module_to_hostModule_[module], *module);
+    assert(err == hipSuccess);
+    std::ignore = err;  // Suppress unused variable warning in release builds
   }
 
   DeviceVar* dvar = nullptr;
-  IHIP_RETURN_ONFAIL(it->second->getStatDeviceVar(&dvar, deviceId));
+  hipError_t result = it->second->getStatDeviceVar(&dvar, deviceId);
+  if (result != hipSuccess) {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: FAILED to get device var, error=%d", result);
+    return result;
+  }
 
   *dev_ptr = dvar->device_ptr();
   *size_ptr = dvar->size();
+  
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] StatCO::getStatGlobalVar: SUCCESS - hostVar=%p, "
+          "devPtr=0x%lx, size=%zu", hostVar, (unsigned long)*dev_ptr, *size_ptr);
+  
   return hipSuccess;
 }
 

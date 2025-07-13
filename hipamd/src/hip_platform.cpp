@@ -126,9 +126,19 @@ void __hipRegisterVar(hip::FatBinaryInfo** modules,  // The device modules conta
                       int constant,                  // Whether this variable is constant
                       int global)                    // Unknown, always 0
 {
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] __hipRegisterVar: hostVar='%s', deviceVar='%s', "
+          "hostPtr=%p, size=%zu, ext=%d, constant=%d, global=%d, modules=%p",
+          hostVar ? hostVar : "<null>", deviceVar ? deviceVar : "<null>", 
+          var, size, ext, constant, global, modules);
+  
   hip::Var* var_ptr = new hip::Var(std::string(hostVar), hip::Var::DeviceVarKind::DVK_Variable,
                                    size, 0, 0, modules);
   hipError_t err = PlatformState::instance().registerStatGlobalVar(var, var_ptr);
+  
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] __hipRegisterVar: registration %s for hostPtr=%p, "
+          "hostVar='%s', error=%d", 
+          (err == hipSuccess) ? "SUCCESS" : "FAILED", var, hostVar ? hostVar : "<null>", err);
+  
   guarantee((err == hipSuccess), "Cannot register Static Global Var, error:%d", err);
 }
 
@@ -315,14 +325,27 @@ hipError_t hipLaunchByPtr(const void* hostFunction) {
 hipError_t hipGetSymbolAddress(void** devPtr, const void* symbol) {
   HIP_INIT_API(hipGetSymbolAddress, devPtr, symbol);
 
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] hipGetSymbolAddress: called with symbol=%p, devPtr=%p, deviceId=%d",
+          symbol, devPtr, ihipGetDevice());
+
   hipError_t hip_error = hipSuccess;
   if (devPtr == nullptr) {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] hipGetSymbolAddress: FAILED - devPtr is null");
     HIP_RETURN(hipErrorInvalidValue);
   }
   size_t sym_size = 0;
 
-  HIP_RETURN_ONFAIL(
-      PlatformState::instance().getStatGlobalVar(symbol, ihipGetDevice(), devPtr, &sym_size));
+  hipError_t result = PlatformState::instance().getStatGlobalVar(symbol, ihipGetDevice(), devPtr, &sym_size);
+  
+  if (result == hipSuccess) {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] hipGetSymbolAddress: SUCCESS - symbol=%p found, "
+            "devPtr=0x%lx, size=%zu", symbol, (unsigned long)*devPtr, sym_size);
+  } else {
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] hipGetSymbolAddress: FAILED - symbol=%p not found, "
+            "error=%d (%s)", symbol, result, hip::ihipGetErrorName(result));
+  }
+
+  HIP_RETURN_ONFAIL(result);
 
   HIP_RETURN(hipSuccess, *devPtr);
 }
