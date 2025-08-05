@@ -54,9 +54,26 @@ bool DmaBlitManager::readBuffer(device::Memory& srcMemory, void* dstHost,
                                 const amd::Coord3D& origin, const amd::Coord3D& size, bool entire,
                                 amd::CopyMetadata copyMetadata) const {
   // Use host copy if memory has direct access
-  if (dev().settings().blocking_blit_ &&
+  bool useHostPath = dev().settings().blocking_blit_ &&
       (setup_.disableReadBuffer_ ||
-       (srcMemory.isHostMemDirectAccess() && !srcMemory.isCpuUncached()))) {
+       (srcMemory.isHostMemDirectAccess() && !srcMemory.isCpuUncached()));
+  
+  ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] DmaBlitManager::readBuffer: srcMemory=%p, "
+          "isHostMemDirectAccess=%d, isCpuUncached=%d, disableReadBuffer=%d, useHostPath=%d",
+          &srcMemory, srcMemory.isHostMemDirectAccess(), srcMemory.isCpuUncached(), 
+          setup_.disableReadBuffer_, useHostPath);
+  
+  // WORKAROUND: Force GPU blit path for profile counter memory that may be incorrectly 
+  // flagged as host-accessible but actually causes segfaults during CPU mapping
+  if (useHostPath && srcMemory.isHostMemDirectAccess()) {
+    // Simple workaround: just force GPU path for all host-accessible memory for now
+    // This avoids the complex signal handling and ensures we use the working GPU blit path
+    ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] DmaBlitManager::readBuffer: Forcing GPU blit path "
+            "for host-accessible memory to avoid potential segfaults, srcPtr=%p", &srcMemory);
+    useHostPath = false;
+  }
+  
+  if (useHostPath) {
     // Stall GPU before CPU access
     gpu().releaseGpuMemoryFence();
     return HostBlitManager::readBuffer(srcMemory, dstHost, origin, size, entire, copyMetadata);
