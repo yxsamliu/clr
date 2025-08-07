@@ -63,7 +63,7 @@ bool DmaBlitManager::readBuffer(device::Memory& srcMemory, void* dstHost,
   
   // WORKAROUND: Force GPU blit path for profile counter memory that may be incorrectly 
   // flagged as host-accessible but actually causes segfaults during CPU mapping
-  if (useHostPath && srcMemory.isHostMemDirectAccess()) {
+  if (useHostPath && srcMemory.isHostMemDirectAccess() && getenv("HIP_FORCE_GPU_BLIT")) {
     // Simple workaround: just force GPU path for all host-accessible memory for now
     // This avoids the complex signal handling and ensures we use the working GPU blit path
     ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] DmaBlitManager::readBuffer: Forcing GPU blit path "
@@ -1740,7 +1740,7 @@ bool KernelBlitManager::readBuffer(device::Memory& srcMemory, void* dstHost,
   
   // WORKAROUND: Force GPU blit path for profile counter memory that may be incorrectly 
   // flagged as host-accessible but actually causes segfaults during CPU mapping
-  if (useHostPath && srcMemory.isHostMemDirectAccess()) {
+  if (useHostPath && srcMemory.isHostMemDirectAccess() && getenv("HIP_FORCE_GPU_BLIT")) {
     // Simple workaround: just force GPU path for all host-accessible memory for now
     // This avoids the complex signal handling and ensures we use the working GPU blit path
     ClPrint(amd::LOG_INFO, amd::LOG_API, "[DEBUG] KernelBlitManager::readBuffer: Forcing GPU blit path "
