@@ -108,7 +108,14 @@ bool KernelParameters::captureAndSet(void** kernelParams, address kernArgs, size
   amd::Memory** memories = reinterpret_cast<amd::Memory**>(mem + memoryObjOffset());
   for (size_t idx = 0; idx < signature_.numParameters(); ++idx) {
     KernelParameterDescriptor& desc = signature_.params()[idx];
-    void* value = kernelParams ? kernelParams[idx] : kernArgs + desc.offset_;
+    void* value;
+    if (kernelParams) {
+      unsigned origIndex = (desc.origIndex_ != ~0U) ? desc.origIndex_ : idx;
+      size_t origOffset = desc.origOffset_;
+      value = static_cast<char*>(kernelParams[origIndex]) + origOffset;
+    } else {
+      value = kernArgs + desc.offset_;
+    }
     void* param = mem + desc.offset_;
     uint32_t uint32_value = 0;
     uint64_t uint64_value = 0;
